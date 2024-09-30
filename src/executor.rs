@@ -48,7 +48,9 @@ pub async fn run_executor(opt: &ExecutorOptions, state: Arc<RwLock<State>>) {
         output_stream,
     } = opt;
 
+    // Build the URL to query the availability of blocks from HotShot
     let query_service_url = sequencer_url.join("availability").unwrap();
+
     let hotshot = HotShotClient::new(query_service_url.clone());
     hotshot.connect(None).await;
 
@@ -68,8 +70,11 @@ pub async fn run_executor(opt: &ExecutorOptions, state: Arc<RwLock<State>>) {
         .await
         .expect("Unable to make websocket connection to L1");
 
+    // Initialize the Rollup and HotShot contracts
     let rollup_contract = ExampleRollup::new(*rollup_address, Arc::new(l1));
     let hotshot_contract = HotShot::new(*hotshot_address, Arc::new(socket_provider));
+
+    // Create a filter to listen to new block events from HotShot
     let filter = hotshot_contract
         .new_blocks_filter()
         .from_block(0)
@@ -77,19 +82,26 @@ pub async fn run_executor(opt: &ExecutorOptions, state: Arc<RwLock<State>>) {
         // seems like a bug and I have reported it: https://github.com/gakonst/ethers-rs/issues/2528.
         // In the mean time we can work around by setting the address manually.
         .address(hotshot_contract.address().into());
+
+    // Subscribe to the block events stream
     let mut commits_stream = filter
         .subscribe()
         .await
         .expect("Unable to subscribe to L1 log stream");
 
+    // Subscribe to the HotShot block header stream
     let mut header_stream = hotshot
         .socket("stream/headers/0")
         .subscribe::<Header>()
         .await
         .expect("Unable to subscribe to HotShot block header stream");
+
+    // Get the VM ID of the Rollup
     let vm_id: u64 = state.read().await.vm.id().into();
 
+    // Main loop: process each new block event
     while let Some(event) = commits_stream.next().await {
+        // Extract block number and number of blocks from the event
         let (first_block, num_blocks) = match event {
             Ok(NewBlocksFilter {
                 first_block_number,
@@ -103,6 +115,8 @@ pub async fn run_executor(opt: &ExecutorOptions, state: Arc<RwLock<State>>) {
 
         // Full block content may not be available immediately so wait for all blocks to be ready
         // before building the batch proof
+
+        // Collect the block headers corresponding to the number of blocks received
         let headers: Vec<Header> = header_stream
             .by_ref()
             .take(num_blocks as usize)
@@ -118,19 +132,24 @@ pub async fn run_executor(opt: &ExecutorOptions, state: Arc<RwLock<State>>) {
             first_block + num_blocks - 1,
             state.read().await.commit()
         );
+        // Process each block in the batch, applying transactions to the rollup state
         for (i, header) in headers.into_iter().enumerate() {
+            // Fetch the commitment from the HotShot contract for the block
             let commitment = hotshot_contract
                 .commitments(first_block + i)
                 .call()
                 .await
                 .expect("Unable to read commitment");
+
+            // Deserialize the commitment into a usable format
             let block_commitment =
                 u256_to_commitment(commitment).expect("Unable to deserialize block commitment");
 
+            // Verify that the block commitment matches the hash of the received block
             if header.commit() != block_commitment {
                 panic!("Block commitment does not match hash of received block, the executor cannot continue");
             }
-
+            // Fetch the namespace proof for the transactions within the block
             let namespace_proof_query: NamespaceProofQueryData = hotshot
                 .get(&format!(
                     "block/{}/namespace/{}",
@@ -142,12 +161,15 @@ pub async fn run_executor(opt: &ExecutorOptions, state: Arc<RwLock<State>>) {
                 .unwrap();
             let namespace_proof = namespace_proof_query.proof;
 
+            // Apply the block's transactions to the current rollup state
             let mut state = state.write().await;
             proofs.push(
                 state
                     .execute_block(header.transactions_root, namespace_proof)
                     .await,
             );
+
+            // Optionally send the updated state through an output stream for other services
             if let Some(stream) = &output_stream {
                 stream
                     .send_async((first_block.as_u64() + (i as u64), state.clone()))
@@ -168,8 +190,13 @@ pub async fn run_executor(opt: &ExecutorOptions, state: Arc<RwLock<State>>) {
             first_block + num_blocks - 1,
             proof,
         );
+
+        // Convert the BatchProof into a format understood by the L1 Rollup Contract
         let proof = example_rollup::BatchProof::from(proof);
+
+        // Attempt to send the batch proof to the Rollup Contract on L1
         let call = rollup_contract.verify_blocks(num_blocks, state_comm, proof);
+        // Retry sending the proof if there is a failure, with a delay
         while let Err(err) = contract_send(&call).await {
             tracing::warn!("Failed to submit proof to contract, retrying: {err}");
             sleep(std::time::Duration::from_secs(1)).await;

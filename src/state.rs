@@ -39,6 +39,14 @@ pub struct State {
 }
 
 impl Committable for State {
+    /// Commits the current state by creating a serialized commitment object.
+    ///
+    /// # Returns
+    /// A `Commitment<State>` representing the current state, which includes:
+    /// - Serialized account data
+    /// - Block hash of the current state
+    /// - Previous state commitments
+    /// - The VM ID used in the state.
     fn commit(&self) -> Commitment<State> {
         let serialized_accounts =
             serde_json::to_string(&self.accounts).expect("Serialization should not fail");
@@ -69,7 +77,14 @@ impl Committable for State {
 }
 
 impl State {
-    /// Create new VM state seeded with some initial balances
+    /// Create new VM state seeded with some initial balances.
+    ///
+    /// # Parameters
+    /// - `initial_balances`: An iterator yielding tuples of addresses and their corresponding initial amounts.
+    /// - `vm`: A RollupVM instance representing the virtual machine associated with this state.
+    ///
+    /// # Returns
+    /// A new instance of `State` containing the initialized accounts.
     pub fn from_initial_balances(
         initial_balances: impl IntoIterator<Item = (Address, Amount)>,
         vm: RollupVM,
@@ -107,6 +122,7 @@ impl State {
         let destination = transaction.transaction.destination;
         let next_nonce = transaction.transaction.nonce;
         let transfer_amount = transaction.transaction.amount;
+        // Fetch the sender's account and check if it exists
         let Account {
             nonce: prev_nonce,
             balance: sender_balance,
@@ -115,7 +131,7 @@ impl State {
             .get_mut(&sender)
             .ok_or(RollupError::InsufficientBalance { address: sender })?;
 
-        // 2)
+        // Validate nonce
         if next_nonce != *prev_nonce + 1 {
             return Err(RollupError::InvalidNonce {
                 address: sender,
@@ -124,7 +140,7 @@ impl State {
             });
         }
 
-        // 3)
+        // Validate balance
         if transfer_amount > *sender_balance {
             return Err(RollupError::InsufficientBalance { address: sender });
         }
@@ -158,6 +174,14 @@ impl State {
             .unwrap_or(0)
     }
 
+    /// Execute a block of transactions, updating the state and generating a proof.
+    ///
+    /// # Parameters
+    /// - `nmt_root`: The root of the NMT for this block.
+    /// - `namespace_proof`: Proofs related to the namespace.
+    ///
+    /// # Returns
+    /// A `Proof` object representing the state after executing the block.
     pub(crate) async fn execute_block(
         &mut self,
         nmt_root: NMTRoot,

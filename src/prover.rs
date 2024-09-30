@@ -19,6 +19,7 @@ use crate::{state::State, RollupVM};
 /// An error that occurs while generating proofs.
 #[derive(Clone, Debug, Snafu)]
 pub enum ProofError {
+    // Raised when proofs are not provided in the correct order (i.e. when consecutive proofs do not align).
     #[snafu(display("Proofs out of order at position {position} in batch proof. Previous proof ends in {new_state} but next proof starts in {old_state}."))]
     OutOfOrder {
         position: usize,
@@ -42,6 +43,18 @@ impl Proof {
     ///
     /// Transaction data comes from the 'get_namespaced_leaves' method of the NamespaceProof interface.
     /// A real prover would incorporate this data during proof construction.
+    ///
+    /// Generates a mock proof of state transition.
+    ///
+    /// # Parameters:
+    /// - `nmt_comm`: NMT commitment for the block.
+    /// - `state_commitment`: The new state commitment after transactions are applied.
+    /// - `previous_state_commitment`: The state commitment before transactions are applied.
+    /// - `namespace_proof`: Proof that transactions are included in the rollup's namespace.
+    /// - `rollup_vm`: A reference to the RollupVM containing the VM ID.
+    ///
+    /// # Returns:
+    /// - A `Proof` struct representing the transition.
     pub fn generate(
         nmt_comm: NMTRoot,
         state_commitment: Commitment<State>,
@@ -49,10 +62,12 @@ impl Proof {
         namespace_proof: NamespaceProofType,
         rollup_vm: &RollupVM,
     ) -> Self {
+        // Verifies that the namespace proof matches the NMT root and the VM ID.
         namespace_proof
             .verify(&nmt_comm.root(), rollup_vm.id())
             .expect("Namespace proof failure, cannot continue")
             .expect("Namespace proof failure, cannot continue");
+        // Creates and returns a mock proof.
         Self {
             block: nmt_comm.commit(),
             old_state: previous_state_commitment,
@@ -72,11 +87,15 @@ pub(crate) struct BatchProof {
 
 impl BatchProof {
     /// Generate a proof of correct execution of a range of blocks.
+    /// # Parameters:
+    /// - `proofs`: A list of individual proofs.
+    ///
+    /// # Returns:
+    /// - A `BatchProof` struct representing the aggregate proof.
     ///
     /// # Error
-    ///
-    /// `proofs` must contain, in order, a proof for each block in a consecutive chain. If it is
-    /// out of order or not consecutive, an error will be returned.
+    /// - Returns `ProofError::OutOfOrder` if proofs are not provided in consecutive order.
+
     pub fn generate(proofs: &[Proof]) -> Result<BatchProof, ProofError> {
         for i in 0..proofs.len() - 1 {
             if proofs[i].new_state != proofs[i + 1].old_state {
@@ -87,7 +106,7 @@ impl BatchProof {
                 });
             }
         }
-
+        // Returns a new BatchProof if all proofs are in order.
         Ok(BatchProof {
             first_block: proofs[0].block,
             last_block: proofs[proofs.len() - 1].block,
@@ -97,10 +116,12 @@ impl BatchProof {
     }
 }
 
+/// Implements conversion from a contract-binding BatchProof to this internal BatchProof struct.
 impl TryFrom<bindings::BatchProof> for BatchProof {
     type Error = SerializationError;
 
     fn try_from(p: bindings::BatchProof) -> Result<Self, Self::Error> {
+        // Converts each field from U256 format to Commitment.
         Ok(Self {
             first_block: u256_to_commitment(p.first_block)?,
             last_block: u256_to_commitment(p.last_block)?,
@@ -110,6 +131,7 @@ impl TryFrom<bindings::BatchProof> for BatchProof {
     }
 }
 
+/// Implements conversion from this internal BatchProof struct to a contract-binding BatchProof.
 impl From<BatchProof> for bindings::BatchProof {
     fn from(p: BatchProof) -> Self {
         Self {

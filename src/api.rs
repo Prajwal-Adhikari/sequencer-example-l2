@@ -18,11 +18,29 @@ use crate::RollupVM;
 use crate::{state::State, transaction::SignedTransaction};
 
 #[derive(Clone, Debug)]
+
+/*
+2 options for users to submit their transactions.
+- through rollup api
+- through hotshot sequencer node api
+*/
 pub struct APIOptions {
     pub api_port: u16,
     pub sequencer_url: Url,
 }
 
+/*
+Submits a signed transaction to a Rollup or Sequencer API.
+
+ # Parameters
+ - `submit_url`: The API endpoint URL.
+ - `transaction`: The signed transaction to be encoded and submitted.
+ - `vm`: A reference to the RollupVM providing the VM ID.
+
+ # Returns
+ - `Ok(())` if successful.
+ - `Err(ServerError)` if any error occurs (e.g., during encoding or sending the request).
+*/
 async fn submit_transaction(
     submit_url: Url,
     transaction: SignedTransaction,
@@ -39,6 +57,28 @@ async fn submit_transaction(
     Ok(())
 }
 
+/*
+Serves an API for interacting with a rollup system, providing transaction submission,
+ balance checking, and nonce retrieval functionalities.
+
+ # Parameters
+ - `options`: API configuration options (port, sequencer URL, etc.).
+ - `state`: Shared application state containing blockchain data, wrapped in `Arc<RwLock<State>>`.
+
+ # Behavior
+ - Initializes the API using configuration from a `TOML` file.
+ - Defines the following endpoints:
+   - `POST /submit`: Submits a signed transaction to the sequencer.
+   - `GET /balance`: Retrieves the balance for a specified Ethereum address.
+   - `GET /nonce`: Retrieves the nonce for a specified Ethereum address.
+ - Maps common errors (e.g., invalid addresses, malformed transactions) to appropriate HTTP error responses.
+ - Starts serving the API at the specified `api_port`.
+
+ # Errors
+ - Returns `io::Result<()>`, where errors can arise from API setup, malformed requests,
+   or transaction submission.
+
+*/
 pub async fn serve(options: &APIOptions, state: Arc<RwLock<State>>) -> io::Result<()> {
     type StateType = Arc<RwLock<State>>;
     let error_mapper = |err| io::Error::new(io::ErrorKind::Other, err);
