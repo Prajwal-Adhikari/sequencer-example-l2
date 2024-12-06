@@ -12,7 +12,7 @@ async-compatibility-layer = { git = "https://github.com/EspressoSystems/async-co
     "logging-utils",
 ] }
 async-std = { version = "1.12", features = ["attributes"] }
-clap = "4.4"
+clap = "4.5"
 commit = { git = "https://github.com/EspressoSystems/commit" }
 contract-bindings = { path = "./contract-bindings" }
 derive_more = "0.99.17"
